@@ -1,4 +1,4 @@
-module response-dumper
+module github.com/adlandh/response-dumper
 
 go 1.21
 
