@@ -3,7 +3,7 @@ module github.com/adlandh/response-dumper
 go 1.21
 
 require (
-	github.com/brianvoe/gofakeit/v6 v6.24.0
+	github.com/brianvoe/gofakeit/v6 v6.25.0
 	github.com/labstack/echo/v4 v4.11.3
 	github.com/stretchr/testify v1.8.4
 )
