@@ -8,8 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-
-	"github.com/labstack/echo/v4"
 )
 
 type Dumper struct {
@@ -19,13 +17,13 @@ type Dumper struct {
 	buf *bytes.Buffer
 }
 
-func NewDumper(resp *echo.Response) *Dumper {
+func NewDumper(respWriter http.ResponseWriter) *Dumper {
 	buf := new(bytes.Buffer)
 
 	return &Dumper{
-		ResponseWriter: resp.Writer,
+		ResponseWriter: respWriter,
 
-		mw:  io.MultiWriter(resp.Writer, buf),
+		mw:  io.MultiWriter(respWriter, buf),
 		buf: buf,
 	}
 }
