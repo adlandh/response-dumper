@@ -1,32 +1,29 @@
 package response
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brianvoe/gofakeit/v6"
-	"github.com/labstack/echo/v4"
+	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDumper(t *testing.T) {
 	responseString := gofakeit.SentenceSimple()
-	e := echo.New()
-
-	e.GET("/", func(c echo.Context) error {
-		respDumper := NewDumper(c.Response())
-		c.Response().Writer = respDumper
-
-		defer func() {
-			require.Equal(t, respDumper.GetResponse(), responseString)
-		}()
-		return c.String(http.StatusOK, responseString)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respDumper := NewDumper(w)
+		w = respDumper
+		w.WriteHeader(http.StatusOK)
+		_, err := io.WriteString(w, responseString)
+		require.NoError(t, err)
+		require.Equal(t, respDumper.GetResponse(), responseString)
 	})
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	e.ServeHTTP(w, r)
+	handler.ServeHTTP(w, r)
 
 	require.Equal(t, w.Body.String(), responseString)
 }
