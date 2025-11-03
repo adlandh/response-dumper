@@ -11,7 +11,7 @@ import (
 )
 
 func TestDumper(t *testing.T) {
-	responseString := gofakeit.SentenceSimple()
+	responseString := gofakeit.Sentence()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		respDumper := NewDumper(w)
 		w = respDumper
