@@ -3,7 +3,7 @@ module github.com/adlandh/response-dumper
 go 1.25
 
 require (
-	github.com/brianvoe/gofakeit/v7 v7.11.0
+	github.com/brianvoe/gofakeit/v7 v7.12.0
 	github.com/stretchr/testify v1.11.1
 )
 
