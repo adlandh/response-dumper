@@ -132,3 +132,7 @@ func (d *Dumper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 	return nil, nil, http.ErrNotSupported
 }
+
+func (d *Dumper) Unwrap() http.ResponseWriter {
+	return d.ResponseWriter
+}
