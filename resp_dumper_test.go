@@ -1,7 +1,10 @@
 package response
 
 import (
+	"bufio"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,4 +104,174 @@ type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) {
 	return 0, io.ErrUnexpectedEOF
+}
+
+func TestDumperBody(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w)
+
+	_, err := io.WriteString(d, "abc")
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), d.Body())
+}
+
+func TestDumperUnwrap(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w)
+	require.Same(t, w, d.Unwrap())
+}
+
+func TestDumperStatusCodeDefault(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w)
+	require.Equal(t, http.StatusOK, d.StatusCode())
+}
+
+func TestDumperDefaultMaxBytesCap(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w)
+
+	body := strings.Repeat("x", DefaultMaxBytes+500)
+	n, err := io.WriteString(d, body)
+	require.NoError(t, err)
+	require.Equal(t, len(body), n)
+	require.Equal(t, len(body), d.BytesWritten())
+	require.Equal(t, DefaultMaxBytes, len(d.Body()))
+	require.Equal(t, body, w.Body.String())
+}
+
+func TestDumperWithMaxBytesUnlimited(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w, WithMaxBytes(0))
+
+	body := strings.Repeat("y", DefaultMaxBytes*3)
+	_, err := io.WriteString(d, body)
+	require.NoError(t, err)
+	require.Equal(t, body, d.GetResponse())
+}
+
+func TestDumperWithMaxBytesCustom(t *testing.T) {
+	w := httptest.NewRecorder()
+	d := NewDumper(w, WithMaxBytes(5))
+
+	_, err := io.WriteString(d, "hello world")
+	require.NoError(t, err)
+	require.Equal(t, "hello", d.GetResponse())
+	require.Equal(t, "hello world", w.Body.String())
+	require.Equal(t, len("hello world"), d.BytesWritten())
+
+	_, err = io.WriteString(d, "!!!")
+	require.NoError(t, err)
+	require.Equal(t, "hello", d.GetResponse())
+}
+
+type flusherRecorder struct {
+	*httptest.ResponseRecorder
+	flushed int
+}
+
+func (f *flusherRecorder) Flush() { f.flushed++ }
+
+func TestDumperFlush(t *testing.T) {
+	f := &flusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+	d := NewDumper(f)
+	d.Flush()
+	d.Flush()
+	require.Equal(t, 2, f.flushed)
+}
+
+type nonFlusherWriter struct{ http.ResponseWriter }
+
+func TestDumperFlushNotSupported(t *testing.T) {
+	d := NewDumper(nonFlusherWriter{httptest.NewRecorder()})
+	require.NotPanics(t, func() { d.Flush() })
+}
+
+type errWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (e errWriter) Write(_ []byte) (int, error) { return 0, e.err }
+
+func TestDumperWriteError(t *testing.T) {
+	want := errors.New("boom")
+	d := NewDumper(errWriter{ResponseWriter: httptest.NewRecorder(), err: want})
+
+	n, err := d.Write([]byte("hi"))
+	require.ErrorIs(t, err, want)
+	require.Zero(t, n)
+	require.Zero(t, d.BytesWritten())
+	require.Empty(t, d.Body())
+}
+
+type pusherRecorder struct {
+	*httptest.ResponseRecorder
+	target string
+	err    error
+}
+
+func (p *pusherRecorder) Push(target string, _ *http.PushOptions) error {
+	p.target = target
+	return p.err
+}
+
+func TestDumperPushSuccess(t *testing.T) {
+	p := &pusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+	d := NewDumper(p)
+	require.NoError(t, d.Push("/asset.css", nil))
+	require.Equal(t, "/asset.css", p.target)
+}
+
+func TestDumperPushUnderlyingError(t *testing.T) {
+	want := errors.New("push failed")
+	p := &pusherRecorder{ResponseRecorder: httptest.NewRecorder(), err: want}
+	d := NewDumper(p)
+	require.ErrorIs(t, d.Push("/x", nil), want)
+}
+
+type hijackerRecorder struct {
+	*httptest.ResponseRecorder
+	conn net.Conn
+	rw   *bufio.ReadWriter
+	err  error
+}
+
+func (h *hijackerRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return h.conn, h.rw, h.err
+}
+
+func TestDumperHijackSuccess(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+	rw := bufio.NewReadWriter(bufio.NewReader(serverConn), bufio.NewWriter(serverConn))
+	h := &hijackerRecorder{ResponseRecorder: httptest.NewRecorder(), conn: serverConn, rw: rw}
+	d := NewDumper(h)
+
+	conn, gotRW, err := d.Hijack()
+	require.NoError(t, err)
+	require.Same(t, serverConn, conn)
+	require.Same(t, rw, gotRW)
+
+	n, err := d.Write([]byte("after hijack"))
+	require.ErrorIs(t, err, ErrHijacked)
+	require.Zero(t, n)
+
+	d.WriteHeader(http.StatusTeapot)
+	require.Equal(t, http.StatusOK, d.StatusCode())
+}
+
+func TestDumperHijackUnderlyingError(t *testing.T) {
+	want := errors.New("hijack failed")
+	h := &hijackerRecorder{ResponseRecorder: httptest.NewRecorder(), err: want}
+	d := NewDumper(h)
+
+	_, _, err := d.Hijack()
+	require.ErrorIs(t, err, want)
+
+	_, err = d.Write([]byte("still here"))
+	require.NoError(t, err)
 }
